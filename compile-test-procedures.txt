@@ -1,0 +1,123 @@
+compile-test-procedures.txt
+
+This documents the method used to compile an arm64 kernel on an armhf
+system. The Pinebook Pro (PBP) uses an arm64 kernel while the root 
+filesystem is armhf.
+
+Early compilations will measure the {gpu,soc}-thermal temperature, the
+cpu frequency of all cores, and the battery voltage.
+
+The soc-thermal temperature along with the frequency of the cores will
+show the impact of kernel compilation on the system. The cpu cores have
+a maximum temperature at which point they begin throttling. The PBP uses
+passive cooling, a piece of thermal foam connects the SoC to the bottom
+case.
+
+The battery voltage is also being measured to verify a claim that under
+heavy cpu load while attached to the power supply, the battery is
+discharged.
+
+It is currently necessary to modify the permissions of the cpu frequency
+interface data of interest in sysfs:
+
+  /sys/devices/system/cpu/cpu{0,1,2,3,4,5}/cpufreq/cpuinfo_cur_freq
+
+The data is currently only readable by root and it is desirable to read
+the data as a user.
+
+Run the following script to temporarily change the permissions to 0444
+for the desired cpufreq data for each core:
+
+  $ sudo ./sysfs-cpufreq-perms.sh
+
+A 2TB USB 3.0 hard drive is used for compilation to reduce premature
+aging of the eMMC storage. And a systemd container is used to isolate
+the compilation from the system. As the USB hard drive is mounted with
+the nodev option, it must first be unmounted then remounted to create a
+container filesystem with debootstrap:
+
+  $ sudo umount /dev/sda1
+  $ sudo mount /dev/sda1 /mnt
+
+The systemd container was created and started using the following:
+
+  $ cd /mnt
+  $ mkdir container
+  $ sudo debootstrap --arch=arm64 stable /mnt/container
+  $ sudo systemd-nspawn -D /mnt/container
+
+Within the container, confirm the container architecture (arm64) with:
+
+  # dpkg --print-architecture
+
+Create a user named 'compiler' to perform the actual compilation:
+
+  # adduser compiler
+
+The sudo package was not installed as part of this exercise, but if it
+were, then the compiler user could be added to the sudo group with the
+following:
+
+  # adduser compiler sudo
+
+Install packages to support kernel compilation:
+
+  # apt install build-essential git python bc libssl-dev
+
+From a separate terminal move the kernel compile script into the
+container. This assumes the script is in your current home directory:
+
+  $ machinectl copy-to container $HOME/compile-kernel-test.sh \
+      /home/compiler/
+
+Within the container switch to the compiler user and its home
+directory:
+
+  # su compiler
+  $ cd
+
+Check the permissions of the compile script, and modify if necessary:
+
+  $ ls -l compile-kernel-test.sh
+  $ chmod +x compile-kernel-test.sh
+
+Create a directory for the kernel sources and download the kernel
+sources into it:
+
+  $ mkdir -p sources/mrfixit2001
+  $ cd sources/mrfixit2001
+  $ git clone https://github.com/mrfixit2001/rockchip-kernel.git
+  $ cd
+
+Check the variables in compile-kernel-test.sh prior to running, and
+configure if necessary. The LOG variable holds the path and name of
+the log file to be created by the run. The KERN_SRC variable holds
+the directory path to the kernel sources. USECORES is the number
+used in the -j option when 'make' is invoked. This is the only
+variable that needs to be modified between runs if running a set
+of tests from -j1 to -j6.
+
+To time and run a test:
+
+  $ time ./compile-kernel-test.sh
+
+After the test completes, manually transcribe the time values if
+this data is of interest.
+
+If running multiple tests, rename the log file that was created
+prior to running a new test.
+
+To extract the log files from the container run the following:
+
+  $ machinectl copy-from container /home/compiler/compile-test_1.log \
+      /home/rock/compile-test/compile-test_1.log
+
+To create a summary of the recorded data run the following, adjust
+permissions if necessary first:
+
+  $ ls -l report.awk
+  $ chmod +x report.awk
+  $ ./report.awk compile-test_1.log > test-summary_1.txt
+
+Repeat for each iteration through -j6. Modify USECORES in the script
+prior to running the script to the desired -j value.
